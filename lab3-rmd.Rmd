@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+Given a dataset of Flickr photographs with a predicted classification of either nature=TRUE or nature=FALSE, and latitude and longitude locations of the photographs that correspond with a NLCD land cover/use type, I am hypothesizing that the spatial distribution of the nature=FALSE data points align with the NLCD land use categories of 21: Developed Open Space, 22: Developed Low Intensity, 23: Developed Medium Intensity, and 24: Developed High Intensity. I also hypothesize that the spatial pattern of nature=TRUE photographs will be more similar to the distribution of all other NLCD categories, including Open Water, Mixed Forest, and Woody Wetlands, ie. "nature". 
+
 ```{r}
 library(readr)
 library(ggplot2)
@@ -22,6 +24,7 @@ library(gifski)
 library(lubridate)
 #library(tidyverse)
 library(wesanderson)
+library(sf)
 
 ```
 
@@ -31,8 +34,7 @@ MichFlickr <- read.csv("MichiganFlickr.csv")
 
 ```{r}
 MichFlickr$date <- as.POSIXct(MichFlickr$dateupload, origin="1970-01-01")
-MichFlickr$date <- as.Date(format(MichFlickr$date, format="%Y-%m-%d")) # lubridate function, simplifying
-###We will also give it a value. We want to count the number of photos 
+MichFlickr$date <- as.Date(format(MichFlickr$date, format="%Y-%m-%d"))
 MichFlickr$year <- year(MichFlickr$date)
 MichFlickr$month <- month(MichFlickr$date, label = TRUE)
 MichFlickr$day <- day(MichFlickr$date)
@@ -40,14 +42,11 @@ MichFlickr$count<- 1
 MichFlickr$Nature<- MichFlickr$predict_Na > 0.6
 ```
 
-I want to investigate the spatial distribution of photos in relation to their classified land use, as well as compare that to whether the photo was classified as nature or not nature. I am first sorting by land use type, and dropping data points where land use was 0.
+To investigate the spatial distribution of photos in relation to their classified land use, as well as compare that to whether the photo was classified as nature or not nature, I am first sorting by land use type, and dropping data points where land use was 0 (NA).
 
 ```{r}
 unique(MichFlickr$Landuse)
 sum(MichFlickr$Landuse == 41)
-nature_false <- sum(MichFlickr$Nature == FALSE)
-nature_true <- sum(MichFlickr$Nature == TRUE)
-proportion_nature <- nature_true / sum(nature_true + nature_false)
 
 landuse_freq <- MichFlickr %>% filter(Landuse != 0) %>%
   group_by(Landuse) %>%
@@ -75,6 +74,8 @@ ggplot(landuse_freq, aes(x = "", y = Proportion, fill = factor(Landuse))) +
 
 From this pie chart, the pink to red slices represent developed land use types and they are about half of the entire dataset. In the non-developed slices, open water, deciduous forest, and cultivated crops make up the most significant "nature" type land uses.
 
+I will compare the proportions of photographs with "nature" vs "non-nature" predicted categories, as well as "natural" vs "developed" categories of NLCD land uses for those same photos.
+
 ```{r}
 
 count_developed <- landuse_freq %>%
@@ -82,12 +83,134 @@ count_developed <- landuse_freq %>%
   summarise(total_photos = sum(total_photos)) 
 
 developed_proportion <- count_developed$total_photos / sum(landuse_freq$total_photos)
-## not working
 
 developed_proportion
 ```
-A little over half of the photos, or 55.73%, were taken at a location classified as one of the "developed" NLCD land use types - 21: Developed open space, 22: Developed low intensity, 23: Developed medium intensity, or 24: Developed high intensity. I wanted to compare this with the proportion of nature vs non-nature photographs (classified independently of land use). Basically, do people take photos of nature at locations classified as non-developed? What would cause discrepancies?
 
 
+A little over half of the photos, or 55.73%, were taken at a location classified as one of the "developed" NLCD land use types - 21: Developed open space, 22: Developed low intensity, 23: Developed medium intensity, or 24: Developed high intensity. That means 44.27% of photographs were taken at "non-developed" land uses sites. I wanted to compare this with the proportion of nature vs non-nature photographs (classified independently of land use). Basically, do people take photos of nature at locations classified as non-developed? What would cause discrepancies?
 
+```{r}
+nature_false <- sum(MichFlickr$Nature == FALSE)
+nature_true <- sum(MichFlickr$Nature == TRUE)
+proportion_nature <- nature_true / sum(nature_true + nature_false)
+proportion_nature
+```
+The proportion of nature to non-nature is much lower than expected, with only 21% of photos being classified as nature.
+
+```{r}
+states <- map_data("state")
+mich <- subset(states, region == "michigan")
+mich <- states %>%
+  filter(region == "michigan")
+counties <- map_data("county")
+mich_county <- subset(counties, region == "michigan")
+
+base_mich <- ggplot(data=mich) +
+  geom_polygon(mapping = aes(x = long, y = lat, group = group), fill = "gray90", color = "black") +
+  coord_fixed(1.3)
+
+base_mich
+```
+
+I am building a base Michigan map from map_data to plot spatial patterns of the photograph data over it.
+
+```{r}
+landuse_map <- c(
+  "11" = "Open Water", 
+  "21" = "Developed, Open Space", 
+  "22" = "Developed, Low Intensity", 
+  "23" = "Developed, Medium Intensity", 
+  "24" = "Developed, High Intensity", 
+  "31" = "Barren Land (Rock/Sand)", 
+  "41" = "Deciduous Forest", 
+  "42" = "Evergreen Forest", 
+  "43" = "Mixed Forest", 
+  "52" = "Shrub/Scrub", 
+  "71" = "Grassland/Herbaceous", 
+  "81" = "Pasture/Hay", 
+  "82" = "Cultivated Crops", 
+  "90" = "Woody Wetlands", 
+  "95" = "Emergent Herbaceous Wetlands"
+)
+
+MichFlickr$LanduseNames <- factor(MichFlickr$Landuse, levels = names(landuse_map), labels = landuse_map)
+```
+
+I added the land use names to the dataset to be interpreted better.
+
+```{r}
+michstatic <- base_mich +
+  geom_point(data = MichFlickr, aes(x = longitude, y = latitude, color = LanduseNames), size = 0.5) + 
+  scale_color_manual(values = c("#486da1", "#e1cdce", "#dc9881", "#f10100", "#ab0101", "#b3afa4", "#6ca966", "#1d6533", "#bdcc93", "#d1bb82", "#edeccc", "#ded83e", "#ae7229", "#bbd7ed", "#71a4c1")) +
+  labs(title = "Flickr Photos by Land Use Type in Michigan",
+       color = "Land Use Type") +
+  guides(color = guide_legend(override.aes = list(size = 3)))+
+  theme_minimal()
+
+michstatic
+```
+This is a static version of the distribution of land use types illustrated via Flickr photos. I used the colors of the NLCD land use classifications.
+
+```{r}
+animateMich <- MichFlickr %>% 
+  filter(Landuse != 0)
+
+# p2 <- base_mich +
+#     geom_point(data = animateMich, aes(x = longitude, y = latitude, color = LanduseNames), size = 1) +
+#     transition_states(LanduseNames, transition_length = 3, state_length = 3) +
+#     labs(title = "Flickr Photos by Land Use Type in Michigan", subtitle = "Land Use: {closest_state}", color = "Land Use Type")
+# 
+# p2
+
+p3 <- michstatic + 
+    transition_states(LanduseNames, transition_length = 3, state_length = 3) +
+    labs(title = "Flickr Photos by Land Use Type in Michigan", subtitle = "Land Use: {closest_state}", color = "Land Use Type")
+
+p3
+   
+```
+
+```{r}
+animate(p3, duration = 10, fps = 20, width = 800, height = 600, renderer = gifski_renderer("landuse_nlcd_animation.gif"))
+```
+
+I can visualize the distribution of land use with an animation iterating through the types of land use associated with the spatial location of the photos. Comparing to a known land use map from NLCD, it is interesting to see how land use from Flickr photographs are distributed - some are obvious like 11: Open Water being mostly concentrated around the coastlines, and 24: Developed, High Intensity is concentrated around the metro Detroit area. 
+
+Now I am categorizing the data by nature vs. non-nature, and comparing the spatial patterns there to splitting the data by developed vs. non-developed NLCD land use.
+
+```{r}
+michnaturestatic <- base_mich +
+  geom_point(data = MichFlickr, aes(x = longitude, y = latitude, color = Nature), size = 0.5) + 
+  scale_color_manual(values = c("TRUE" = "#1d6533", "FALSE" = "#ab0101")) +
+  labs(title = "Flickr Photos by Nature Classification in Michigan") +
+  guides(color = guide_legend(override.aes = list(size = 3)))+
+  theme_minimal()
+
+michnaturestatic
+```
+```{r}
+MichFlickr$Developed <- MichFlickr$Landuse %in% c(21, 22, 23, 24)
+
+michdevelopedstatic <- base_mich +
+  geom_point(data = MichFlickr, aes(x = longitude, y = latitude, color = Developed), size = 0.5) + 
+  scale_color_manual(values = c("TRUE" = "#ab0101", "FALSE" = "#1d6533")) +
+  labs(title = "Flickr Photos by Developed vs Non-Developed Land Use") +
+  guides(color = guide_legend(override.aes = list(size = 3)))+
+  theme_minimal()
+
+michdevelopedstatic
+```
+
+It could perhaps be of interest to animate this data by making a gif that flips back and forth between the developed/non-developed and nature/non-nature maps.
+
+Some takeaways from this data are:
+- Nature=TRUE occurs more in the northern half of the state, although more photographs in general are concentrated in the Lower Peninsula.
+- Perhaps in the metro Detroit area, both datasets trend towards a higher concentration of non-nature and developed.
+- Developed=TRUE shows up as distinct clusters where cities and towns are, while Nature=FALSE does not follow a distinct pattern.
+
+Some conclusions could be that a lot more photos are showing up as Nature=FALSE (roughly 80% of the photographs), than Developed=TRUE (roughly 56%) because despite being at a land use site such as Open Water or Deciduous Forest, the photograph could still be categorized as Nature=FALSE perhaps due to the subject of the photo being of people and not environment-focused. This is interesting to note if someone wanted to know the content of photographs - do Flickr users gravitate more towards posting photographs of people or non-natural objects, even when in a natural environment setting?
+
+Lab question 2:
+To counteract "noisy" data, ie. plotting the individual occurrences of photos, binning can be done to group spatially and/or temporally adjacent points together. Similar to giving a histogram wider bars, the data points can be mapped by wider time intervals or bigger spatial cells to smooth out this data. Furthermore, setting a threshhold to exlclude single outliers, such as 1 photograph in a spatial cell of 5km x 5km, can also reduce noise as these outliers are likely not crucial to the overall pattern.
 
