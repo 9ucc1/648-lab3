@@ -169,11 +169,7 @@ p3 <- michstatic +
 
 p3
    
-```
-
-```{r}
-animate(p3, duration = 10, fps = 20, width = 800, height = 600, renderer = gifski_renderer("landuse_nlcd_animation.gif"))
-```
+```  
 
 I can visualize the distribution of land use with an animation iterating through the types of land use associated with the spatial location of the photos. Comparing to a known land use map from NLCD, it is interesting to see how land use from Flickr photographs are distributed - some are obvious like 11: Open Water being mostly concentrated around the coastlines, and 24: Developed, High Intensity is concentrated around the metro Detroit area. 
 
